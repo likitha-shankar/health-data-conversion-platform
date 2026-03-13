@@ -36,7 +36,7 @@ jobs:
         run: docker compose build
 
       - name: Start stack
-        run: docker compose up -d
+        run: TERMINOLOGY_AUTOLOAD_ON_START=false docker compose up -d
 
       - name: Wait for orchestrator health
         run: |
