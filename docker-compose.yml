@@ -1,0 +1,204 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-health_platform}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-health_platform}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - platform-net
+
+  audit-service:
+    build:
+      context: .
+      dockerfile: apps/audit-service/Dockerfile
+    environment:
+      PORT: 3003
+      SERVICE_VERSION: 1.0.0
+      DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgres@postgres:5432/health_platform}
+      AUDIT_DB_SCHEMA: ${AUDIT_DB_SCHEMA:-audit}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3005,http://dashboard:3005}
+    ports:
+      - "3003:3003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3003/health/ready >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      - platform-net
+
+  error-bus:
+    build:
+      context: .
+      dockerfile: apps/error-bus/Dockerfile
+    environment:
+      PORT: 3004
+      SERVICE_VERSION: 1.0.0
+      DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgres@postgres:5432/health_platform}
+      ERROR_DB_SCHEMA: ${ERROR_DB_SCHEMA:-error_bus}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3005,http://dashboard:3005}
+    ports:
+      - "3004:3004"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3004/health/ready >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      - platform-net
+
+  terminology-service:
+    build:
+      context: .
+      dockerfile: apps/terminology-service/Dockerfile
+    environment:
+      PORT: 3002
+      SERVICE_VERSION: 1.0.0
+      DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgres@postgres:5432/health_platform}
+      TERMINOLOGY_DB_SCHEMA: ${TERMINOLOGY_DB_SCHEMA:-terminology}
+      TERMINOLOGY_RELEASE_ID: ${TERMINOLOGY_RELEASE_ID:-terminology-v1.0.0}
+      ENABLE_TIER2_EMBEDDING: ${ENABLE_TIER2_EMBEDDING:-true}
+      TERMINOLOGY_AUTOLOAD_ON_START: ${TERMINOLOGY_AUTOLOAD_ON_START:-true}
+      ATHENA_VOCAB_DIR: ${ATHENA_VOCAB_DIR:-/app/data/athena}
+      ATHENA_DOWNLOAD_URL: ${ATHENA_DOWNLOAD_URL:-}
+      TERMINOLOGY_INDEX_MAX_ROWS: ${TERMINOLOGY_INDEX_MAX_ROWS:-5000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3005,http://dashboard:3005}
+    ports:
+      - "3002:3002"
+    volumes:
+      - ./data/athena:/app/data/athena:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3002/health/ready >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 15s
+      retries: 30
+      start_period: 30s
+    networks:
+      - platform-net
+
+  hl7v2-agent:
+    build:
+      context: .
+      dockerfile: apps/hl7v2-agent/Dockerfile
+    environment:
+      PORT: 3001
+      SERVICE_VERSION: 1.0.0
+      AUDIT_SERVICE_URL: http://audit-service:3003
+      TERMINOLOGY_SERVICE_URL: http://terminology-service:3002
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3005,http://dashboard:3005}
+    ports:
+      - "3001:3001"
+    depends_on:
+      audit-service:
+        condition: service_healthy
+      terminology-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3001/health/ready >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      - platform-net
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: apps/orchestrator/Dockerfile
+    environment:
+      PORT: 3000
+      SERVICE_VERSION: 1.0.0
+      DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgres@postgres:5432/health_platform}
+      ORCHESTRATOR_DB_SCHEMA: ${ORCHESTRATOR_DB_SCHEMA:-orchestrator}
+      ADMIN_SECRET: ${ADMIN_SECRET:-dev-admin-secret}
+      MLLP_API_KEY: ${MLLP_API_KEY:-qmemo_local_mllp_demo_key}
+      HL7_AGENT_URL: http://hl7v2-agent:3001
+      TERMINOLOGY_SERVICE_URL: http://terminology-service:3002
+      DASHBOARD_URL: http://dashboard:3005
+      HL7_AGENT_VERSION: 1.0.0
+      TERMINOLOGY_RELEASE_ID: ${TERMINOLOGY_RELEASE_ID:-terminology-v1.0.0}
+      AUDIT_SERVICE_URL: http://audit-service:3003
+      ERROR_BUS_URL: http://error-bus:3004
+      ENABLE_REPLAY_ENDPOINT: ${ENABLE_REPLAY_ENDPOINT:-true}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3005,http://dashboard:3005}
+    ports:
+      - "3000:3000"
+    depends_on:
+      hl7v2-agent:
+        condition: service_healthy
+      terminology-service:
+        condition: service_healthy
+      audit-service:
+        condition: service_healthy
+      error-bus:
+        condition: service_healthy
+      dashboard:
+        condition: service_healthy
+      mllp-listener:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3000/health/ready >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      - platform-net
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: apps/dashboard/Dockerfile
+    environment:
+      PORT: 3005
+      VITE_ORCHESTRATOR_URL: http://localhost:3000
+      VITE_ERROR_BUS_URL: http://localhost:3004
+      VITE_AUDIT_SERVICE_URL: http://localhost:3003
+    ports:
+      - "3005:3005"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3005/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      - platform-net
+
+  mllp-listener:
+    build:
+      context: .
+      dockerfile: apps/mllp-listener/Dockerfile
+    environment:
+      MLLP_PORT: ${MLLP_PORT:-2575}
+      ORCHESTRATOR_URL: http://orchestrator:3000
+      MLLP_API_KEY: ${MLLP_API_KEY:-qmemo_local_mllp_demo_key}
+      MLLP_DEFAULT_TARGET_FORMAT: ${MLLP_DEFAULT_TARGET_FORMAT:-fhir_r4}
+    ports:
+      - "2575:2575"
+    networks:
+      - platform-net
+
+networks:
+  platform-net:
+    driver: bridge
+
+volumes:
+  postgres-data:

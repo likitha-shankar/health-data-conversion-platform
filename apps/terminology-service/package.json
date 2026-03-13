@@ -1,0 +1,30 @@
+{
+  "name": "@platform/terminology-service",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@platform/contracts": "1.0.0",
+    "adm-zip": "^0.5.16",
+    "cors": "^2.8.5",
+    "csv-parse": "^5.6.0",
+    "express": "^4.21.2",
+    "natural": "^8.1.0",
+    "pg": "^8.16.3",
+    "pg-copy-streams": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.7",
+    "@types/express": "^5.0.1",
+    "@types/pg-copy-streams": "^1.2.5",
+    "supertest": "^7.1.1"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@platform/serializers",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@platform/contracts": "1.0.0",
+    "ajv": "^8.17.1"
+  }
+}

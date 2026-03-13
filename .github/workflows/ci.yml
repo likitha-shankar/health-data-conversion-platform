@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm run test
+
+      - name: Build workspace
+        run: npm run build
+
+      - name: Docker build
+        run: docker compose build
+
+      - name: Start stack
+        run: docker compose up -d
+
+      - name: Wait for orchestrator health
+        run: |
+          for i in {1..30}; do
+            if curl -sf http://localhost:3000/health > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "orchestrator health check failed"
+          docker compose logs
+          exit 1
+
+      - name: Smoke test
+        run: npm run smoke
+
+      - name: Print compose status
+        if: always()
+        run: docker compose ps
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v

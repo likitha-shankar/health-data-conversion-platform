@@ -1,0 +1,775 @@
+Multi-Agent Health Data Conversion Platform
+Specification Supplements: A, B, and C
+Canonical Internal Model  ·  PHI Handling  ·  Format Detection Engine
+Version 1.0  |  March 2026  |  Pre-build requirement — all three supplements must be reviewed and signed off before Week 1 of the MVP build begins.
+
+Supplement A — Canonical Internal Model (CIM)
+Version: 1.0  |  Status: Required before Week 1 build  |  Owner: Platform Architecture
+
+A.1  Purpose and Design Rationale
+The Canonical Internal Model (CIM) is the single shared data representation that every specialist agent maps its source data into, and that every output serializer reads from to produce the target format. It is the universal contract between all agents and all outputs. Without a locked CIM definition, agents and serializers will drift independently and produce incompatible intermediate representations that cannot be debugged or audited consistently.
+
+The CIM is a FHIR R4 superset. It uses FHIR R4 resource structures as its base because FHIR R4 is the most widely adopted modern clinical data model, and because using it as the CIM means the FHIR R4 output serializer is lossless by construction. Non-FHIR targets (OMOP, SNOMED records, LOINC lab output, flat JSON) have defined mapping tables from CIM fields to their target schemas.
+
+The superset extensions added on top of FHIR R4 are: agent provenance fields (which agent version produced each field), confidence scores per field (from the terminology layer), NLP extraction metadata (when a field was produced by the NLP pipeline), and a ConflictedValue wrapper (when two source fields produced different values for the same CIM field).
+
+A.2  Top-Level CIM Record Structure
+Every CIM record produced by any specialist agent must conform to the following top-level envelope:
+
+Field
+Type
+Description
+cim_record_id
+UUID
+Globally unique ID assigned by the agent on creation
+ingestion_id
+UUID
+Propagated from the orchestrator request; links to audit trail
+cim_version
+string (semver)
+CIM schema version used to produce this record (e.g. 1.0.0)
+source_format
+enum
+HL7V2 | FHIR_R4 | CDA | CSV | PDF | DICOM | PLAIN_TEXT | CUSTOM
+agent_id
+string
+ID of the specialist agent that produced this record
+agent_version
+string
+Semantic version + build hash of the agent
+terminology_release_id
+string
+Pinned terminology version snapshot used for all mappings in this record
+produced_at
+ISO 8601 UTC
+Timestamp when the CIM record was finalized by the agent
+record_status
+enum
+COMPLETE | PARTIAL | FAILED
+patient
+Patient
+Patient identity block — see A.3
+encounters[ ]
+Encounter[ ]
+Clinical encounters — see A.4
+observations[ ]
+Observation[ ]
+Lab results, vital signs, assessments — see A.5
+conditions[ ]
+Condition[ ]
+Diagnoses and clinical problems — see A.6
+medications[ ]
+Medication[ ]
+Medication statements and orders — see A.7
+allergies[ ]
+Allergy[ ]
+Allergy and intolerance records — see A.8
+procedures[ ]
+Procedure[ ]
+Clinical procedures performed — see A.9
+provenance
+Provenance
+Source system, message ID, and transmission metadata — see A.10
+cim_flags[ ]
+string[ ]
+Record-level flags raised during agent processing
+field_confidence_map
+Map<path, score>
+Confidence score per CIM field path; populated by terminology layer
+conflicted_values[ ]
+ConflictedValue[ ]
+Fields where two sources produced different values — see A.11
+
+A.3  Patient Block
+Field
+Type
+Required
+Notes
+patient_id
+string
+Yes
+Internal platform UUID assigned at identity resolution
+source_identifiers[ ]
+Identifier[ ]
+Yes
+MRN, SSN-hash, external IDs with assigning authority
+family_name
+string
+No
+Raw value preserved; never normalized without audit entry
+given_names[ ]
+string[ ]
+No
+Array to handle multiple given names
+birth_date
+ISO 8601 date
+No
+UTC date; ambiguous year flagged NORM_DATE_AMBIGUOUS_YEAR
+administrative_gender
+enum
+No
+male | female | other | unknown — follows FHIR AdministrativeGender
+death_date
+ISO 8601 UTC
+No
+If present, encounter dates must not exceed this value
+addresses[ ]
+Address[ ]
+No
+FHIR Address type; use period to indicate current vs historical
+telecoms[ ]
+ContactPoint[ ]
+No
+Phone and email; system + value + use
+identity_match_score
+float 0–1
+System
+Probabilistic match score from identity resolver; <0.95 flags NORM_IDENTITY_AMBIGUOUS
+
+A.4  Encounter Block
+Field
+Type
+Required
+Notes
+encounter_id
+UUID
+Yes
+Platform-assigned
+source_encounter_id
+string
+No
+Original ID from source system
+status
+enum
+Yes
+planned | arrived | in-progress | finished | cancelled | unknown
+class
+Coding
+Yes
+FHIR v3 ActCode: IMP | AMB | EMER | SS | VR | HH
+period_start
+ISO 8601 UTC
+Yes
+Encounter start datetime; must precede death_date if present
+period_end
+ISO 8601 UTC
+No
+Null for ongoing encounters
+service_provider
+string
+No
+Organization name or ID from source
+reason_codes[ ]
+Coding[ ]
+No
+SNOMED or ICD-10 coded reason for encounter
+
+A.5  Observation Block (Labs, Vitals, Assessments)
+Field
+Type
+Required
+Notes
+observation_id
+UUID
+Yes
+Platform-assigned
+status
+enum
+Yes
+registered | preliminary | final | amended | corrected | cancelled
+category
+Coding
+Yes
+laboratory | vital-signs | exam | social-history | imaging | therapy
+loinc_code
+Coding
+Yes
+LOINC code, display, system; confidence score in field_confidence_map
+effective_datetime
+ISO 8601 UTC
+Yes
+When observation was made; flag TEMPORAL_ANCHOR_MISSING if absent
+value_quantity
+Quantity
+Cond.
+value, unit (UCUM), comparator; one of value_quantity / value_string / value_codeable_concept required
+value_string
+string
+Cond.
+Textual result when no numeric value available
+value_codeable_concept
+Coding
+Cond.
+Coded result (e.g. blood type, organism)
+reference_range
+Range
+No
+low / high / text; critical for pediatric validation
+interpretation
+Coding
+No
+H | L | N | A | AA | HH | LL — FHIR ObservationInterpretation
+encounter_id_ref
+UUID ref
+No
+Reference to parent encounter if known
+
+A.6  Condition Block (Diagnoses)
+Field
+Type
+Required
+Notes
+condition_id
+UUID
+Yes
+Platform-assigned
+clinical_status
+enum
+Yes
+active | recurrence | relapse | inactive | remission | resolved
+verification_status
+enum
+Yes
+confirmed | provisional | refuted | unconfirmed; maps from NLP assertion class
+snomed_code
+Coding
+Yes
+SNOMED CT code, display, version; confidence score required in field_confidence_map
+icd_code
+Coding
+No
+ICD-10-CM secondary coding if available
+onset_datetime
+ISO 8601 UTC
+No
+When condition began; from temporal reasoning if NLP-extracted
+assertion_class
+enum
+Yes
+ASSERTED | NEGATED | POSSIBLE | FAMILY_HISTORY | HISTORICAL | HYPOTHETICAL
+assertion_confidence
+float 0–1
+Yes
+NLP model confidence on the assertion class; not the same as mapping confidence
+nlp_source_text
+string
+Cond.
+Required when condition was extracted from unstructured text; verbatim source span
+
+A.7  Medication Block
+⚠
+Medications carry the highest confidence threshold in the terminology layer (0.97). The dosage, route, and frequency sub-fields must never be silently dropped if the target format cannot represent them — this triggers VALID_CLINICAL_LOSS_MEDICATION_DOSAGE.
+
+Field
+Type
+Required
+Notes
+medication_id
+UUID
+Yes
+Platform-assigned
+status
+enum
+Yes
+active | completed | stopped | on-hold | unknown
+rxnorm_code
+Coding
+Yes
+RxNorm code at concept level (ingredient); confidence required
+ndc_code
+string
+No
+National Drug Code if available from source
+dosage_quantity
+Quantity
+Critical
+value + unit (UCUM); loss triggers clinical stop condition
+route
+Coding
+Critical
+SNOMED route code; e.g. oral, IV, subcutaneous
+frequency
+Timing
+No
+FHIR Timing structure: frequency, period, periodUnit
+effective_period
+Period
+No
+Start and end of medication course
+
+A.8  Allergy Block
+🛑
+Allergy severity and reaction type must never be dropped silently. Loss of allergy severity triggers VALID_CLINICAL_LOSS_ALLERGY_SEVERITY, a P1 stop condition.
+
+Field
+Type
+Required
+Notes
+allergy_id
+UUID
+Yes
+Platform-assigned
+clinical_status
+enum
+Yes
+active | inactive | resolved
+substance_code
+Coding
+Yes
+SNOMED or RxNorm code for the allergen
+criticality
+enum
+Critical
+low | high | unable-to-assess; loss is a P1 stop
+reaction_manifestations[ ]
+Coding[ ]
+Critical
+SNOMED codes for reaction symptoms (e.g. anaphylaxis, urticaria)
+reaction_severity
+enum
+Critical
+mild | moderate | severe; loss is a P1 stop
+onset_datetime
+ISO 8601 UTC
+No
+When the allergy was first documented
+
+A.9  Procedure Block
+Field
+Type
+Required
+Notes
+procedure_id
+UUID
+Yes
+Platform-assigned
+status
+enum
+Yes
+preparation | in-progress | completed | stopped | not-done
+snomed_code
+Coding
+Yes
+SNOMED procedure code; confidence required
+performed_datetime
+ISO 8601 UTC
+No
+When procedure was performed
+body_site
+Coding
+No
+SNOMED body site; laterality (left/right) must be preserved and never dropped
+laterality
+enum
+Critical
+left | right | bilateral | not-applicable; loss requires human review gate
+
+A.10  Provenance Block
+Field
+Type
+Notes
+source_system_id
+string
+Identifier of the originating system (e.g. epic_prod_east)
+source_message_id
+string
+Original message control ID from source (e.g. HL7 MSH-10)
+source_timestamp
+ISO 8601 UTC
+Timestamp as received from source system before normalization
+transport_channel
+string
+MLLP | HTTP | BULK_FHIR | FILE_DROP | WEBHOOK
+sending_application
+string
+MSH-3 equivalent; sending application name
+sending_facility
+string
+MSH-4 equivalent; sending facility name
+
+A.11  ConflictedValue Wrapper
+When two source fields map to the same CIM path with different values, neither is silently dropped. Both are preserved in a ConflictedValue wrapper and the CIM field is left as null until the conflict is resolved by the validation layer or human review.
+
+conflicted_values: [
+  {
+    "cim_path": "$.patient.birth_date",
+    "source_a": { "value": "1980-12-05", "source_path": "PID.7", "source_system": "epic" },
+    "source_b": { "value": "1980-12-15", "source_path": "demographics.dob", "source_system": "lab_feed" },
+    "resolution_status": "UNRESOLVED | HUMAN_RESOLVED | AUTO_RESOLVED",
+    "resolved_value": null,
+    "resolved_by": null,
+    "resolved_at": null
+  }
+]
+
+A.12  CIM Versioning Policy
+The CIM schema is versioned using semantic versioning. Patch versions (1.0.x) may add optional fields. Minor versions (1.x.0) may add required fields but must include a migration guide and a grace period during which old agents producing the previous minor version are accepted. Major versions (x.0.0) break backward compatibility and require all agents to be updated before promotion.
+
+✓
+No agent may be promoted to production if its output does not validate against the current active CIM version. The CIM JSON Schema is published as a versioned artifact in the platform repository and is the single source of truth for all agent output contracts.
+
+
+Supplement B — PHI Handling Specification
+Version: 1.0  |  Status: Required before any patient data is processed  |  Owner: Security + Clinical Informatics
+
+B.1  Scope and Regulatory Basis
+This specification defines how Protected Health Information (PHI) is handled throughout the conversion pipeline. It covers: what constitutes PHI in this system, where PHI may and may not appear, what the PHI preprocessing gate must do before any record is processed, how PHI is handled in logs and audit records, and what constitutes a PHI gate pass versus fail.
+
+The regulatory basis is HIPAA's Technical Safeguard requirements under 45 CFR §164.312, which require access controls, audit controls, integrity controls, and transmission security for all ePHI. State laws (e.g. CCPA, SHIELD Act) may impose additional obligations. This specification establishes the minimum floor; tenant-specific configurations may add stricter controls but never relax them.
+
+B.2  PHI Definition (for this platform)
+The following data elements are classified as PHI when they can be used alone or in combination to identify an individual:
+
+PHI Element
+Risk Level
+Platform Treatment
+Name (full, partial, initials)
+High
+Tokenized in logs; preserved in CIM patient block with access control
+Geographic data below state level
+Medium
+ZIP code preserved for clinical use; redacted from logs
+Dates (DOB, admission, discharge, death)
+Medium
+Full dates preserved in CIM; age-at-event derived fields logged only
+Telephone / fax numbers
+High
+Tokenized; not logged
+Email addresses
+High
+Tokenized; not logged
+SSN (or hash)
+Critical
+Raw SSN must never appear in logs or audit trail; only HMAC-SHA256 hash allowed
+Medical record numbers (MRN)
+High
+Preserved in CIM source_identifiers; tokenized in all logs
+Account numbers
+High
+Tokenized; not logged
+Certificate / license numbers
+Medium
+Treated as PHI if associated with a patient record
+Device identifiers / serial numbers
+Medium
+Tokenized if linked to patient
+URLs containing patient identifiers
+High
+Never logged; scrubbed from all audit fields
+IP addresses (if linked to patient)
+Medium
+Not stored in patient records; transport logs separated from clinical logs
+Biometric identifiers
+Critical
+Not processable by this platform; triggers immediate halt
+Full-face photographs
+Critical
+Not processable; triggers immediate halt
+
+B.3  PHI Preprocessing Gate
+The PHI preprocessing gate is the first step after ingestion and before any parsing or mapping occurs. It runs as a synchronous blocking check. No record may proceed to the parsing layer until the gate produces a deterministic PASS or FAIL result. An ambiguous or timeout result is treated as FAIL.
+
+B.3.1  Gate Components
+
+Component
+What It Does
+Regex PHI Scanner
+Pattern-matches against SSN formats, MRN patterns (configurable per tenant), phone number formats, email addresses, and common date-of-birth patterns appearing outside expected fields
+NER PHI Detector
+Microsoft Presidio (open source) runs NER-based detection for names, locations, and identifiers appearing in free-text fields or outside their expected positions
+Structural Position Checker
+For structured formats (HL7, FHIR), verifies that PHI appears only in expected fields. PHI detected outside expected fields (e.g. SSN in a clinical note field) raises a high-risk flag
+Biometric / Image Detector
+Detects base64-encoded image data or biometric patterns in fields where they should not appear; triggers immediate halt
+
+B.3.2  Gate Pass / Fail Criteria
+
+Result
+Condition
+Action
+PASS
+No PHI detected outside expected positions; no biometrics; no unresolvable patterns
+Record proceeds to parsing layer; phi_handling_status = PASS written to context snapshot
+PASS_WITH_FLAGS
+PHI detected in expected positions but with unusual patterns (e.g. SSN in PID-19 where expected but formatted unusually)
+Record proceeds with PHI_POSITION_UNUSUAL flag; elevated audit logging for this record
+FAIL
+PHI detected outside expected positions; biometric data detected; SSN in free-text field; gate timeout (>5 seconds); gate service unavailable
+Immediate halt; INGEST_PHI_RISK_UNRESOLVABLE error; record routed to HIPAA escalation queue; never written to standard DLQ; separate encrypted storage only
+
+B.4  PHI in Logs and Audit Records
+🛑
+Raw PHI values must never appear in any log line, metric label, trace span name, or error message. Violations of this rule constitute a potential HIPAA breach and must be treated as a P0 security incident.
+
+The following rules apply to all log output, audit records, error payloads, and observability data:
+
+Rule
+Implementation
+No raw identifiers in logs
+Patient names, MRNs, SSNs, DOBs, phone numbers, and emails are replaced with tokenized references (e.g. patient_token: ptk_7f3a2b1c). The token is reversible only via the PHI Vault service with an authorized access request.
+No raw clinical values in error messages
+Error messages reference field paths and value hashes, not values. Correct: 'source_path: PID.7, value_hash: sha256:abc123'. Wrong: 'source_path: PID.7, value: 1980-12-05'.
+Audit trail stores value hashes by default
+The audit_field_transform table stores SHA-256 hashes of source and target values by default. Full values are stored only in the PHI Vault with a reference pointer in the audit record. Debug replay can retrieve full values from the vault with authorization.
+Stack traces must not contain field values
+Exception handlers must scrub any CIM record fields from stack traces before logging. Use a dedicated CIM scrubber middleware on all exception handlers.
+Distributed traces contain no PHI
+Jaeger/OpenTelemetry span attributes must only contain: trace_id, span_id, ingestion_id, agent_id, layer, status. No clinical values, no patient identifiers.
+
+B.5  PHI in Storage
+Storage Layer
+PHI Handling
+Raw record archive (S3)
+Encrypted at rest with AES-256; bucket policy prevents public access; KMS key rotation every 90 days; access logged to CloudTrail. Original bytes retained for audit replay. Lifecycle policy: retain for 7 years, then secure deletion.
+Audit trail (PostgreSQL)
+Encrypted at rest; value fields store hashes only by default; full values in PHI Vault. Row-level security by tenant_id. Append-only — no UPDATE or DELETE permissions granted to application roles.
+CIM records in transit
+TLS 1.3 minimum on all internal service-to-service communication; mTLS between agent and orchestrator; Kafka topics encrypted with broker-side encryption.
+Output store (OMOP, FHIR repo)
+Encrypted at rest; tenant-isolated schemas; no cross-tenant query possible at DB layer.
+PHI Vault
+HashiCorp Vault or AWS Secrets Manager with fine-grained policies; access to full PHI values requires an authorized access request logged to the HIPAA audit log; emergency break-glass access requires two-person authorization.
+
+B.6  Breach Response Protocol
+If PHI is detected in a log, error message, trace, or any unauthorized storage location, the following steps apply immediately:
+
+Step
+Action
+1
+Contain: disable the log stream or storage location where PHI was found. Do not delete — preserve evidence.
+2
+Notify: alert the security lead and HIPAA Privacy Officer within 1 hour of detection.
+3
+Assess: determine scope — how many records, which PHI elements, how long the exposure existed.
+4
+Remediate: identify and fix the code path that allowed PHI to escape. Add a regression test that would have caught it.
+5
+Report: if the breach involves more than 500 individuals, notify HHS within 60 days. Affected individuals notified within 60 days regardless of count.
+
+
+Supplement C — Format Detection Engine Specification
+Version: 1.0  |  Status: Required before orchestrator build  |  Owner: Platform Architecture
+
+C.1  Purpose
+The format detection engine is the first decision point in the orchestrator. Every downstream routing decision — which specialist agent runs, which parser is invoked, which error codes apply — depends on its output. An unspecified or poorly calibrated detection engine is a hidden source of misroutes, which in this system means a wrong agent processes a record and potentially produces clinically incorrect output. This specification defines exactly how detection works, how confidence scores are calculated, and what the thresholds and tie-breaking rules are.
+
+C.2  Detection Architecture
+Format detection runs as a three-stage pipeline. Each stage adds evidence to a shared evidence accumulator. The final confidence score for each candidate format is a weighted sum of evidence from all three stages. Detection is always completed before any agent is invoked — it runs in the orchestrator, not inside any specialist agent.
+
+Stage
+Name
+What It Does
+1
+Byte-level sniffer
+Inspects the first 512 bytes for byte order marks, delimiter patterns, framing characters, and magic byte sequences. Runs in <5ms. Produces a set of candidate formats with initial weights.
+2
+Structural probe
+Attempts lightweight structural parsing of the top 2 candidates from Stage 1. Checks for required structural landmarks (e.g. MSH segment, JSON root object, XML namespace, PDF header). Does not attempt full parsing. Runs in <50ms.
+3
+Agent self-declaration
+Each registered agent's supportsSource() method is called with the Stage 1 + 2 evidence. Agents return a SupportDecision with a score and evidence. The orchestrator aggregates agent self-declarations as a third evidence source.
+
+C.3  Evidence Signals and Weights
+The following signals contribute to the confidence score for each candidate format. Weights are applied multiplicatively — a strong positive signal and a strong negative signal together produce a moderate score, not a high score.
+
+Signal
+Positive Weight
+Negative Weight
+Notes
+MSH segment at byte 0–3
++0.70
+N/A
+Strongest single HL7 v2 signal; MSH is always the first segment
+Field separator | component sep | repetition sep at MSH-1/2
++0.20
+N/A
+Confirms standard HL7 v2 delimiter structure
+MLLP framing bytes (0x0B at start, 0x1C 0x0D at end)
++0.15
+-0.10 if absent with TCP transport
+Present on TCP MLLP connections; absent on HTTP submissions
+JSON root object with resourceType field
++0.65
+N/A
+Strongest FHIR signal; resourceType is required in all FHIR resources
+resourceType value is a known FHIR R4 resource type
++0.25
+-0.20 if resourceType is unknown
+Confirmed FHIR R4 vs possibly FHIR STU3 or custom JSON
+XML root element with ClinicalDocument local name
++0.70
+N/A
+Definitive CDA signal; ClinicalDocument is the mandated CDA root
+CDA namespace URI present (urn:hl7-org:v3)
++0.25
+-0.15 if absent with ClinicalDocument root
+Confirms CDA vs other XML-based clinical documents
+PDF header (%PDF-)
++0.90
+N/A
+Near-definitive; PDF magic bytes are highly reliable
+DICOM preamble (132 bytes + DICM magic)
++0.95
+N/A
+Essentially definitive; DICOM has a unique binary signature
+CSV: first line contains header-like tokens with comma/tab delimiters
++0.40
+-0.10 if >50% lines have inconsistent column counts
+Weak signal alone; combined with column name matching gives confidence
+CSV: column headers match known EHR export patterns
++0.35
+N/A
+Pattern library maintained per EHR vendor; increases with each new confirmed source
+Plain text: no structural markers; natural language sentences
++0.35
+-0.30 if any structural markers present
+Plain text is detection by elimination; other formats should be ruled out first
+Transport-level content-type header matches format
++0.10
+-0.05 if content-type contradicts byte-level evidence
+Low weight — content-type headers are frequently wrong in legacy health IT systems
+Sender profile declares format explicitly
++0.15
+-0.05 if payload contradicts declared format
+Per-tenant sender profiles can pre-declare expected formats for known source systems
+
+C.4  Confidence Score Calculation
+The raw confidence score for each candidate format is computed as a bounded weighted sum of all applicable positive and negative signals. Scores are normalized to the range [0, 1]. The detection engine produces a ranked list of candidates with their scores.
+
+raw_score(format) = Σ(positive_weights) + Σ(negative_weights)
+normalized_score(format) = max(0, min(1, raw_score(format)))
+
+Example for a standard HL7 v2.5 ORU message submitted via HTTP:
+
+Signal
+Weight Applied
+Note
+MSH at byte 0
++0.70
+Present
+Standard HL7 delimiters at MSH-1/2
++0.20
+Present
+MLLP framing absent on HTTP transport
++0.00
+Not penalized on HTTP
+Content-type header: application/hl7-v2
++0.10
+Header matches
+HL7 v2 agent supportsSource() score
++0.15
+Agent self-declares high confidence
+Total
+1.15 → 1.00
+Capped at 1.0
+
+C.5  Routing Decision Thresholds
+Condition
+Decision
+Action
+Top candidate score ≥ 0.85 AND second candidate score ≤ top - 0.20
+ROUTE
+Route to the top candidate's specialist agent. Record detection_confidence in context snapshot.
+Top candidate score ≥ 0.85 AND second candidate within 0.20 of top
+FORMAT_AMBIGUOUS
+Halt. Do not route. Store both candidates and scores in review packet. Route to human review queue for format disambiguation.
+Top candidate score between 0.60 and 0.85
+FORMAT_LOW_CONFIDENCE
+Halt. Route to human review. Include top 3 candidates with scores and the evidence signals that contributed.
+Top candidate score < 0.60
+FORMAT_UNKNOWN
+Halt. Route to human review. No agent is invoked. Original bytes preserved for manual inspection.
+Detection engine timeout (> 200ms)
+DETECTION_TIMEOUT
+Treat as FORMAT_UNKNOWN. Alert on repeated timeouts — indicates oversized payload or detection engine overload.
+
+C.6  Tie-Breaking Rules
+When two formats score within 0.20 of each other (FORMAT_AMBIGUOUS), the following ordered tie-breaking rules are applied before routing to human review. If any rule produces a clear winner, routing proceeds with a note that tie-breaking was applied:
+
+Rule
+Condition
+Resolution
+1
+Sender profile has declared an expected format for this source_system_id
+Use the declared format if it is one of the tied candidates and its score is ≥ 0.60. Record tie_broken_by: SENDER_PROFILE.
+2
+One candidate has a byte-level signal with weight ≥ 0.65 and the other does not
+Prefer the candidate with the strong byte-level signal. Byte signatures are more reliable than structural probes. Record tie_broken_by: BYTE_SIGNAL_DOMINANCE.
+3
+Transport channel strongly implies a format (e.g. MLLP always means HL7 v2)
+Route to the transport-implied format if its score is ≥ 0.60. Record tie_broken_by: TRANSPORT_CHANNEL.
+4
+No rule resolves the tie
+Route to FORMAT_AMBIGUOUS human review. No automatic routing. The review packet includes all signals and scores for each candidate.
+
+C.7  Human Review Resolution Flow
+When a record is routed to the human review queue due to FORMAT_AMBIGUOUS or FORMAT_UNKNOWN, the following flow applies:
+
+Step
+Action
+1
+Reviewer sees: original bytes (first 1KB displayed), all candidate formats with scores, all contributing evidence signals, and tie-breaking rules that were attempted.
+2
+Reviewer selects the correct format and provides a confidence justification note.
+3
+If the resolved format comes from a known sender (source_system_id is set), the reviewer may optionally update the sender profile to pre-declare this format for future records from the same source, preventing future FORMAT_AMBIGUOUS routing for this sender.
+4
+Record is re-injected into the pipeline with forced_source_format and reviewer_id set. The orchestrator bypasses detection and routes directly to the specified agent, recording that routing was human-resolved.
+5
+Every human-resolved detection case is reviewed weekly. If the same source_system_id produces repeated FORMAT_AMBIGUOUS events, a sender profile update is mandatory — repeated ambiguity from a known sender is a configuration gap, not a routing edge case.
+
+C.8  Format Detection Output Schema
+The detection engine produces the following structured output that is included in the orchestrator context snapshot for every record:
+
+{
+  "detection_result": {
+    "decision": "ROUTE | FORMAT_AMBIGUOUS | FORMAT_LOW_CONFIDENCE | FORMAT_UNKNOWN | DETECTION_TIMEOUT",
+    "top_candidate": {
+      "format": "HL7V2 | FHIR_R4 | CDA | CSV | PDF | DICOM | PLAIN_TEXT | CUSTOM",
+      "score": 1.0,
+      "score_components": {
+        "msh_at_byte_0": 0.70,
+        "hl7_delimiters": 0.20,
+        "content_type_header": 0.10,
+        "agent_self_declaration": 0.15
+      }
+    },
+    "all_candidates": [
+      { "format": "HL7V2", "score": 1.0 },
+      { "format": "PLAIN_TEXT", "score": 0.12 }
+    ],
+    "tie_breaking_applied": false,
+    "tie_breaking_rule": null,
+    "human_resolved": false,
+    "human_resolver_id": null,
+    "detection_duration_ms": 18,
+    "stage_reached": 3
+  }
+}
+
+C.9  Detection Engine Performance Requirements
+Metric
+Requirement
+Notes
+Stage 1 (byte sniffer) latency
+< 5ms P99
+Must not block ingestion throughput
+Full detection pipeline latency
+< 100ms P99
+Included in overall ingestion SLA
+Detection timeout threshold
+200ms
+Any detection taking >200ms is treated as DETECTION_TIMEOUT
+FORMAT_AMBIGUOUS rate (steady state)
+< 0.5% of records
+Higher rate indicates sender profile gaps or new source systems
+FORMAT_UNKNOWN rate (steady state)
+< 0.1% of records
+Alert if exceeds 1% — indicates new unsupported format or malicious payload
+Detection accuracy on golden test set
+≥ 99.5%
+100 synthetic records per supported format in golden test set
+
+🛑
+The format detection engine is a critical path component. Any regression in detection accuracy directly causes misroutes, which are the most dangerous failure mode in the entire platform. Every change to detection signal weights or thresholds must be evaluated against the full golden test set before deployment.
+

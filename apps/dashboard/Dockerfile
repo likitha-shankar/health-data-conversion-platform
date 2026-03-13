@@ -1,0 +1,12 @@
+FROM node:20-alpine
+WORKDIR /app
+
+COPY package.json package-lock.json tsconfig.base.json eslint.config.mjs ./
+COPY apps ./apps
+COPY packages ./packages
+
+RUN npm ci --workspace=@platform/dashboard --include-workspace-root
+RUN npm run build -w @platform/dashboard
+
+EXPOSE 3005
+CMD ["npx", "serve", "-s", "apps/dashboard/dist", "-l", "3005"]

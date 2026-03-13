@@ -1,0 +1,98 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "version": "2",
+  "services": {
+    "postgres": {
+      "plugin": "postgresql"
+    },
+    "orchestrator": {
+      "rootDirectory": "apps/orchestrator",
+      "build": {
+        "dockerfilePath": "apps/orchestrator/Dockerfile"
+      },
+      "deploy": {
+        "startCommand": "node dist/index.js",
+        "healthcheckPath": "/health/ready",
+        "healthcheckTimeout": 120
+      },
+      "variables": {
+        "DATABASE_URL": "${{postgres.DATABASE_URL}}",
+        "PORT": "3000"
+      }
+    },
+    "hl7v2-agent": {
+      "rootDirectory": "apps/hl7v2-agent",
+      "build": {
+        "dockerfilePath": "apps/hl7v2-agent/Dockerfile"
+      },
+      "deploy": {
+        "startCommand": "node dist/index.js",
+        "healthcheckPath": "/health/ready"
+      },
+      "variables": {
+        "DATABASE_URL": "${{postgres.DATABASE_URL}}",
+        "PORT": "3001"
+      }
+    },
+    "terminology-service": {
+      "rootDirectory": "apps/terminology-service",
+      "build": {
+        "dockerfilePath": "apps/terminology-service/Dockerfile"
+      },
+      "deploy": {
+        "startCommand": "node dist/index.js",
+        "healthcheckPath": "/health/ready"
+      },
+      "variables": {
+        "DATABASE_URL": "${{postgres.DATABASE_URL}}",
+        "PORT": "3002"
+      },
+      "volumes": [
+        {
+          "mountPath": "/app/data/athena"
+        }
+      ]
+    },
+    "audit-service": {
+      "rootDirectory": "apps/audit-service",
+      "build": {
+        "dockerfilePath": "apps/audit-service/Dockerfile"
+      },
+      "deploy": {
+        "startCommand": "node dist/index.js",
+        "healthcheckPath": "/health/ready"
+      },
+      "variables": {
+        "DATABASE_URL": "${{postgres.DATABASE_URL}}",
+        "PORT": "3003"
+      }
+    },
+    "error-bus": {
+      "rootDirectory": "apps/error-bus",
+      "build": {
+        "dockerfilePath": "apps/error-bus/Dockerfile"
+      },
+      "deploy": {
+        "startCommand": "node dist/index.js",
+        "healthcheckPath": "/health/ready"
+      },
+      "variables": {
+        "DATABASE_URL": "${{postgres.DATABASE_URL}}",
+        "PORT": "3004"
+      }
+    },
+    "dashboard": {
+      "rootDirectory": "apps/dashboard",
+      "build": {
+        "dockerfilePath": "apps/dashboard/Dockerfile"
+      },
+      "deploy": {
+        "startCommand": "npx serve -s dist -l 3005",
+        "healthcheckPath": "/"
+      },
+      "variables": {
+        "PORT": "3005"
+      }
+    }
+  }
+}
