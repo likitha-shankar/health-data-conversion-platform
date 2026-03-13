@@ -6,7 +6,7 @@ COPY apps ./apps
 COPY packages ./packages
 
 RUN npm ci --workspace=@platform/hl7v2-agent --include-workspace-root
-RUN npm run build -w @platform/hl7v2-agent
+RUN npm run build -w @platform/contracts && npm run build -w @platform/hl7v2-agent
 
 EXPOSE 3001
 CMD ["node", "apps/hl7v2-agent/dist/index.js"]
